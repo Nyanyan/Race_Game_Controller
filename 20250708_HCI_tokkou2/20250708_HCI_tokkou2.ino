@@ -35,6 +35,8 @@ struct Quaternion {
 Quaternion q = {1.0, 0.0, 0.0, 0.0};  // Initial quaternion (identity)
 Quaternion q_initial = {1.0, 0.0, 0.0, 0.0};  // Initial orientation for calibration
 float handle_angle = 0.0;  // Current handle angle in radians
+float cumulative_angle = 0.0;  // Cumulative rotation angle
+float prev_yaw = 0.0;  // Previous yaw angle for cumulative calculation
 bool calibration_done = false;
 
 #define HANDLE_NEUTRAL 477
@@ -165,7 +167,21 @@ float get_handle_rotation_angle() {
   float yaw = atan2(2.0 * (q_relative.w * q_relative.z + q_relative.x * q_relative.y),
                    1.0 - 2.0 * (q_relative.y * q_relative.y + q_relative.z * q_relative.z));
   
-  return yaw;
+  // Calculate the difference from previous yaw
+  float yaw_diff = yaw - prev_yaw;
+  
+  // Handle wraparound at ±π
+  if (yaw_diff > PI) {
+    yaw_diff -= 2.0 * PI;
+  } else if (yaw_diff < -PI) {
+    yaw_diff += 2.0 * PI;
+  }
+  
+  // Add to cumulative angle
+  cumulative_angle += yaw_diff;
+  prev_yaw = yaw;
+  
+  return cumulative_angle;
 }
 
 void handle_func() {
@@ -273,6 +289,8 @@ void setup() {
   q.y = 0.0;
   q.z = 0.0;
   q_initial = q;
+  cumulative_angle = 0.0;
+  prev_yaw = 0.0;
 
   MsTimer2::set(25, handle_func);
   MsTimer2::start();
@@ -341,6 +359,8 @@ void loop() {
   if (!digitalRead(CALIBRATION_PIN)) {
     q_initial = q;  // Store current quaternion as initial orientation
     handle_angle = 0.0;
+    cumulative_angle = 0.0;  // Reset cumulative angle
+    prev_yaw = 0.0;  // Reset previous yaw
     calibration_done = true;
     
     // LED feedback for calibration
