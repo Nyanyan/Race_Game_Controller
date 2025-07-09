@@ -4,8 +4,9 @@
 const int MPU_addr=0x68;  // I2C address of the MPU-6050
 
 #define HANDLE_PIN A0
-#define SPACE_PIN 4
-#define BRAKE_PIN 5
+#define SPACE_PIN 16
+#define BRAKE_PIN 10
+#define CALIBRATION_PIN 14
 
 #ifndef KEY_SPACE
 #define KEY_SPACE 0x20
@@ -112,6 +113,7 @@ void setup() {
   pinMode(HANDLE_PIN, INPUT);
   pinMode(SPACE_PIN, INPUT_PULLUP);
   pinMode(BRAKE_PIN, INPUT_PULLUP);
+  pinMode(CALIBRATION_PIN, INPUT_PULLUP);
   Keyboard.begin();
   // Serial.begin(9600);
 
@@ -145,7 +147,7 @@ int get_handle_val() {
   GyY=Wire.read()<<8|Wire.read();  // 0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
   GyZ=Wire.read()<<8|Wire.read();  // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
 
-  double gyz_double = -(GyZ - 8);
+  double gyz_double = (GyZ - 8);
   if (abs(gyz_double) < GYRO_NOT_SENSE_OFFSET) {
     gyz_double = 0;
   } else if (gyz_double >= GYRO_NOT_SENSE_OFFSET) {
@@ -178,6 +180,10 @@ bool space_pressed = false;
 bool brake_pressed = false;
 
 void loop() {
+  if (!digitalRead(CALIBRATION_PIN)) {
+    sum_gyz = 0;
+  }
+
   if (!digitalRead(SPACE_PIN)) {
     if (!space_pressed) {
       Keyboard.press(KEY_SPACE);
