@@ -11,8 +11,11 @@ const int MPU_addr=0x68;  // I2C address of the MPU-6050
 #define KEY_SPACE 0x20
 #endif
 
-#define HANDLE_DIV 50
-#define UNSENSE_VAL 2
+// #define HANDLE_DIV 50
+// #define UNSENSE_HANDLE_VAL 2
+#define UNSENSE_HANDLE_VAL 2
+#define GYRO_NOT_SENSE_OFFSET 80
+double sum_gyz = 0;
 
 #define HANDLE_NEUTRAL 477
 int handle_val = 0;
@@ -23,10 +26,12 @@ int handle_n_released = 0;
 #define LEFT 1
 bool pushed[2] = {false, false};
 
-const int duty_ratio_arr[20][2] = {
+#define N_DUTY_RATIO 20
+
+const int duty_ratio_arr[N_DUTY_RATIO][2] = {
+  { 1, 12 },
   { 1, 8 },
-  { 1, 6 },
-  { 1, 4 },
+  { 1, 5 },
   { 1, 3 },
   { 1, 2 },
   { 1, 1 },
@@ -39,8 +44,8 @@ const int duty_ratio_arr[20][2] = {
   { 8, 1 },
   { 9, 1 },
   { 10, 1 },
-  { 1, 0 },
-  { 1, 0 },
+  { 11, 1 },
+  { 12, 1 },
   { 1, 0 },
   { 1, 0 },
   { 1, 0 },
@@ -115,12 +120,18 @@ void setup() {
   Wire.write(0x6B);  // PWR_MGMT_1 register
   Wire.write(0);     // set to zero (wakes up the MPU-6050)
   Wire.endTransmission(true);
+  // Configure gyroscope range to ±2000 deg/s
+  Wire.beginTransmission(MPU_addr);
+  Wire.write(0x1B);  // GYRO_CONFIG register
+  Wire.write(0x18);  // set gyroscope range to ±2000 deg/s (11 on bits 4 and 3)
+  Wire.endTransmission(true);
+  delay(500);
 
   MsTimer2::set(30, handle_func);
   MsTimer2::start();
 }
 
-int get_handle() {
+int get_handle_val() {
   int16_t AcX,AcY,AcZ,Tmp,GyX,GyY,GyZ;
   Wire.beginTransmission(MPU_addr);
   Wire.write(0x3B);  // starting with register 0x3B (ACCEL_XOUT_H)
@@ -133,7 +144,34 @@ int get_handle() {
   GyX=Wire.read()<<8|Wire.read();  // 0x43 (GYRO_XOUT_H) & 0x44 (GYRO_XOUT_L)
   GyY=Wire.read()<<8|Wire.read();  // 0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
   GyZ=Wire.read()<<8|Wire.read();  // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
-  return AcY;
+
+  double gyz_double = -(GyZ - 8);
+  if (abs(gyz_double) < GYRO_NOT_SENSE_OFFSET) {
+    gyz_double = 0;
+  } else if (gyz_double >= GYRO_NOT_SENSE_OFFSET) {
+    gyz_double -= GYRO_NOT_SENSE_OFFSET;
+  } else if (gyz_double <= -GYRO_NOT_SENSE_OFFSET) {
+    gyz_double += GYRO_NOT_SENSE_OFFSET;
+  }
+  sum_gyz += gyz_double;
+  int handle_val_p = sum_gyz / 30000;
+  if (abs(handle_val_p) < UNSENSE_HANDLE_VAL) {
+    handle_val_p = 0;
+  } else if (handle_val_p > 0) {
+    handle_val_p -= UNSENSE_HANDLE_VAL;
+  } else if (handle_val_p < 0) {
+    handle_val_p += UNSENSE_HANDLE_VAL;
+  }
+  handle_val_p = max(-N_DUTY_RATIO + 1, handle_val_p);
+  handle_val_p = min(N_DUTY_RATIO - 1, handle_val_p);
+  Serial.print(GyZ);
+  Serial.print('\t');
+  Serial.print(gyz_double);
+  Serial.print('\t');
+  Serial.print(sum_gyz);
+  Serial.print('\t');
+  Serial.println(handle_val_p);
+  return handle_val_p;
 }
 
 bool space_pressed = false;
@@ -145,7 +183,7 @@ void loop() {
       Keyboard.press(KEY_SPACE);
     }
     space_pressed = true;
-    delay(50);
+    // delay(50);
   } else if (space_pressed) {
     Keyboard.release(KEY_SPACE);
     space_pressed = false;
@@ -156,7 +194,7 @@ void loop() {
       Keyboard.press(KEY_DOWN_ARROW);
     }
     brake_pressed = true;
-    delay(50);
+    // delay(50);
   } else if (brake_pressed){
     Keyboard.release(KEY_DOWN_ARROW);
     brake_pressed = false;
@@ -164,25 +202,14 @@ void loop() {
 
   // int handle = analogRead(HANDLE_PIN);
   // int handle_val_p = (handle - HANDLE_NEUTRAL) / HANDLE_DIV;
-  // if (abs(handle_val_p) < UNSENSE_VAL) {
+  // if (abs(handle_val_p) < UNSENSE_HANDLE_VAL) {
   //   handle_val_p = 0;
   // } else if (handle_val_p > 0) {
-  //   handle_val_p -= UNSENSE_VAL;
+  //   handle_val_p -= UNSENSE_HANDLE_VAL;
   // } else if (handle_val_p < 0) {
-  //   handle_val_p += UNSENSE_VAL;
+  //   handle_val_p += UNSENSE_HANDLE_VAL;
   // }
-  int handle = get_handle();
-  int handle_val_p = handle / 800;
-  if (abs(handle_val_p) < UNSENSE_VAL) {
-    handle_val_p = 0;
-  } else if (handle_val_p > 0) {
-    handle_val_p -= UNSENSE_VAL;
-  } else if (handle_val_p < 0) {
-    handle_val_p += UNSENSE_VAL;
-  }
-  handle_val_p = max(handle_val_p, -19);
-  handle_val_p = min(handle_val_p, 19);
-  handle_val = handle_val_p;
+  handle_val = get_handle_val();
   // Serial.print(handle);
   // Serial.print('\t');
   // Serial.println(handle_val_p);
