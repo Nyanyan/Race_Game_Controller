@@ -8,6 +8,12 @@ const int MPU_addr=0x68;  // I2C address of the MPU-6050
 #define BRAKE_PIN 10
 #define CALIBRATION_PIN 14
 
+#define N_LED 5
+const int led_pins[2][N_LED] = {
+  {A3, A1, A0, 15, A2},
+  {6, 4, 5, 8, 9} // left
+};
+
 #ifndef KEY_SPACE
 #define KEY_SPACE 0x20
 #endif
@@ -27,13 +33,13 @@ int handle_n_released = 0;
 #define LEFT 1
 bool pushed[2] = {false, false};
 
-#define N_DUTY_RATIO 20
+#define N_DUTY_RATIO 18
 
 const int duty_ratio_arr[N_DUTY_RATIO][2] = {
   { 1, 12 },
+  { 1, 10 },
   { 1, 8 },
-  { 1, 5 },
-  { 1, 3 },
+  { 1, 4 },
   { 1, 2 },
   { 1, 1 },
   { 2, 1 },
@@ -48,8 +54,6 @@ const int duty_ratio_arr[N_DUTY_RATIO][2] = {
   { 11, 1 },
   { 12, 1 },
   { 1, 0 },
-  { 1, 0 },
-  { 1, 0 },
 };
 
 void handle_func() {
@@ -60,6 +64,9 @@ void handle_func() {
     if (pushed[LEFT]) {
       Keyboard.release(KEY_LEFT_ARROW);
     }
+    handle_pushed = false;
+    handle_n_pushed = 0;
+    handle_n_released = 0;
     return;
   }
   int n_on = duty_ratio_arr[abs(handle_val) - 1][0];
@@ -114,6 +121,11 @@ void setup() {
   pinMode(SPACE_PIN, INPUT_PULLUP);
   pinMode(BRAKE_PIN, INPUT_PULLUP);
   pinMode(CALIBRATION_PIN, INPUT_PULLUP);
+  for (int i = 0; i < 2; ++i) {
+    for (int j = 0; j < N_LED; ++j) {
+      pinMode(led_pins[i][j], OUTPUT);
+    }
+  }
   Keyboard.begin();
   // Serial.begin(9600);
 
@@ -129,7 +141,7 @@ void setup() {
   Wire.endTransmission(true);
   delay(500);
 
-  MsTimer2::set(30, handle_func);
+  MsTimer2::set(25, handle_func);
   MsTimer2::start();
 }
 
@@ -166,13 +178,13 @@ int get_handle_val() {
   }
   handle_val_p = max(-N_DUTY_RATIO + 1, handle_val_p);
   handle_val_p = min(N_DUTY_RATIO - 1, handle_val_p);
-  Serial.print(GyZ);
-  Serial.print('\t');
-  Serial.print(gyz_double);
-  Serial.print('\t');
-  Serial.print(sum_gyz);
-  Serial.print('\t');
-  Serial.println(handle_val_p);
+  // Serial.print(GyZ);
+  // Serial.print('\t');
+  // Serial.print(gyz_double);
+  // Serial.print('\t');
+  // Serial.print(sum_gyz);
+  // Serial.print('\t');
+  // Serial.println(handle_val_p);
   return handle_val_p;
 }
 
@@ -216,6 +228,29 @@ void loop() {
   //   handle_val_p += UNSENSE_HANDLE_VAL;
   // }
   handle_val = get_handle_val();
+  if (handle_val == 0) {
+    for (int i = 0; i < 2; ++i) {
+      for (int j = 0; j < N_LED; ++j) {
+        digitalWrite(led_pins[i][j], LOW);
+      }
+    }
+  } else {
+    const int sgn[2] = {1, -1}; // right, left
+    for (int i = 0; i < 2; ++i) {
+      if (handle_val * sgn[i] > 0) {
+        int n_led_light = min(N_LED, (handle_val * sgn[i] + 3 - 1) / 3);
+        for (int j = 0; j < n_led_light; ++j) {
+          digitalWrite(led_pins[i][j], HIGH);
+        }
+        for (int j = n_led_light; j < N_LED; ++j) {
+          digitalWrite(led_pins[i][j], LOW);
+        }
+        for (int j = 0; j < N_LED; ++j) {
+          digitalWrite(led_pins[i ^ 1][j], LOW);
+        }
+      }
+    }
+  }
   // Serial.print(handle);
   // Serial.print('\t');
   // Serial.println(handle_val_p);
