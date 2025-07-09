@@ -19,26 +19,17 @@ const int led_pins[2][N_LED] = {
 #define KEY_SPACE 0x20
 #endif
 
-// Quaternion and rotation parameters
+// #define HANDLE_DIV 50
+// #define UNSENSE_HANDLE_VAL 2
 #define UNSENSE_HANDLE_VAL 2
-#define GYRO_SCALE 16.4    // ±2000deg/s scale factor
-#define ACCEL_SCALE 16384.0 // ±2g scale factor
-#define FILTER_ALPHA 0.98  // Complementary filter coefficient
-#define DT 0.025           // 25ms sampling period
+#define GYRO_NOT_SENSE_OFFSET 80
+#define ACCEL_SCALE 16384.0  // ±2g scale factor
 
-// Quaternion structure
-struct Quaternion {
-  float w, x, y, z;
-};
+double sum_gyz = 0;
 
-// Global variables for quaternion-based rotation
-Quaternion q = {1.0, 0.0, 0.0, 0.0};  // Initial quaternion (identity)
-Quaternion q_initial = {1.0, 0.0, 0.0, 0.0};  // Initial orientation for calibration
-float handle_angle = 0.0;  // Current handle angle in radians
-float cumulative_angle = 0.0;  // Cumulative rotation angle
-float prev_yaw = 0.0;  // Previous yaw angle for cumulative calculation
-float gyro_yaw_rate = 0.0;  // Current gyroscope yaw rate
-bool calibration_done = false;
+// Variables for handle plane angle calculation
+float initial_accel_x = 0, initial_accel_y = 0, initial_accel_z = 0;
+bool calibrated = false;
 
 #define HANDLE_NEUTRAL 477
 int handle_val = 0;
@@ -71,144 +62,6 @@ const int duty_ratio_arr[N_DUTY_RATIO][2] = {
   { 12, 1 },
   { 1, 0 },
 };
-
-// Quaternion helper functions
-Quaternion quaternion_multiply(Quaternion a, Quaternion b) {
-  Quaternion result;
-  result.w = a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z;
-  result.x = a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y;
-  result.y = a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x;
-  result.z = a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w;
-  return result;
-}
-
-Quaternion quaternion_conjugate(Quaternion q) {
-  Quaternion result;
-  result.w = q.w;
-  result.x = -q.x;
-  result.y = -q.y;
-  result.z = -q.z;
-  return result;
-}
-
-void quaternion_normalize(Quaternion* q) {
-  float norm = sqrt(q->w * q->w + q->x * q->x + q->y * q->y + q->z * q->z);
-  if (norm > 0.0) {
-    q->w /= norm;
-    q->x /= norm;
-    q->y /= norm;
-    q->z /= norm;
-  }
-}
-
-Quaternion quaternion_from_axis_angle(float x, float y, float z, float angle) {
-  Quaternion result;
-  float half_angle = angle * 0.5;
-  float sin_half = sin(half_angle);
-  result.w = cos(half_angle);
-  result.x = x * sin_half;
-  result.y = y * sin_half;
-  result.z = z * sin_half;
-  return result;
-}
-
-void update_quaternion_from_gyro(float gx, float gy, float gz, float dt) {
-  // Convert gyro readings to rad/s
-  gx = gx * PI / 180.0;
-  gy = gy * PI / 180.0;
-  gz = gz * PI / 180.0;
-  
-  // Create quaternion from angular velocities
-  float angle = sqrt(gx*gx + gy*gy + gz*gz) * dt;
-  if (angle > 0.0) {
-    float axis_x = gx / sqrt(gx*gx + gy*gy + gz*gz);
-    float axis_y = gy / sqrt(gx*gx + gy*gy + gz*gz);
-    float axis_z = gz / sqrt(gx*gx + gy*gy + gz*gz);
-    
-    Quaternion delta_q = quaternion_from_axis_angle(axis_x, axis_y, axis_z, angle);
-    q = quaternion_multiply(q, delta_q);
-    quaternion_normalize(&q);
-  }
-}
-
-void update_quaternion_from_accel(float ax, float ay, float az) {
-  // Normalize accelerometer data
-  float norm = sqrt(ax*ax + ay*ay + az*az);
-  if (norm == 0.0) return;
-  ax /= norm;
-  ay /= norm;
-  az /= norm;
-  
-  // Calculate roll and pitch from accelerometer
-  float roll = atan2(ay, az);
-  float pitch = atan2(-ax, sqrt(ay*ay + az*az));
-  
-  // Create quaternion from roll and pitch (yaw is maintained from gyro)
-  Quaternion q_accel;
-  q_accel.w = cos(roll/2) * cos(pitch/2);
-  q_accel.x = sin(roll/2) * cos(pitch/2);
-  q_accel.y = cos(roll/2) * sin(pitch/2);
-  q_accel.z = 0.0; // No yaw correction from accelerometer
-  
-  // Apply complementary filter
-  q.w = FILTER_ALPHA * q.w + (1.0 - FILTER_ALPHA) * q_accel.w;
-  q.x = FILTER_ALPHA * q.x + (1.0 - FILTER_ALPHA) * q_accel.x;
-  q.y = FILTER_ALPHA * q.y + (1.0 - FILTER_ALPHA) * q_accel.y;
-  // Keep z component from gyro integration
-  
-  quaternion_normalize(&q);
-}
-
-float get_handle_rotation_angle() {
-  // Calculate relative quaternion from initial position
-  Quaternion q_initial_conjugate = quaternion_conjugate(q_initial);
-  Quaternion q_relative = quaternion_multiply(q_initial_conjugate, q);
-  
-  // Extract Z-axis (yaw) rotation angle
-  float yaw = atan2(2.0 * (q_relative.w * q_relative.z + q_relative.x * q_relative.y),
-                   1.0 - 2.0 * (q_relative.y * q_relative.y + q_relative.z * q_relative.z));
-  
-  // Calculate the difference from previous yaw
-  float yaw_diff = yaw - prev_yaw;
-  
-  // More robust wraparound handling with gyroscope rate validation
-  if (abs(yaw_diff) > PI) {
-    // Check if the gyroscope rate supports this direction
-    float expected_direction = (gyro_yaw_rate > 0) ? 1.0 : -1.0;
-    
-    if (yaw_diff > PI) {
-      // Potential wrap from π to -π
-      float alt_diff = yaw_diff - 2.0 * PI;
-      // Use gyroscope rate to validate the direction
-      if (abs(gyro_yaw_rate) > 10.0) { // Only trust gyro if significant rotation
-        yaw_diff = (gyro_yaw_rate < 0) ? alt_diff : yaw_diff;
-      } else {
-        yaw_diff = alt_diff; // Default to shorter path
-      }
-    } else if (yaw_diff < -PI) {
-      // Potential wrap from -π to π  
-      float alt_diff = yaw_diff + 2.0 * PI;
-      // Use gyroscope rate to validate the direction
-      if (abs(gyro_yaw_rate) > 10.0) { // Only trust gyro if significant rotation
-        yaw_diff = (gyro_yaw_rate > 0) ? alt_diff : yaw_diff;
-      } else {
-        yaw_diff = alt_diff; // Default to shorter path
-      }
-    }
-  }
-  
-  // Additional safety check: limit maximum angular change per sample
-  float max_change = 0.5; // Maximum 0.5 radians (~30 degrees) per 25ms
-  if (abs(yaw_diff) > max_change) {
-    yaw_diff = (yaw_diff > 0) ? max_change : -max_change;
-  }
-  
-  // Add to cumulative angle
-  cumulative_angle += yaw_diff;
-  prev_yaw = yaw;
-  
-  return cumulative_angle;
-}
 
 void handle_func() {
   if (handle_val == 0) {
@@ -295,32 +148,130 @@ void setup() {
   Wire.write(0x00);  // set accelerometer range to ±2g
   Wire.endTransmission(true);
   
-  // Configure gyroscope range to ±2000 deg/s for fast rotation
+  // Configure gyroscope range to ±2000 deg/s
   Wire.beginTransmission(MPU_addr);
   Wire.write(0x1B);  // GYRO_CONFIG register
   Wire.write(0x18);  // set gyroscope range to ±2000 deg/s (11 on bits 4 and 3)
   Wire.endTransmission(true);
   
-  // Configure low pass filter
-  Wire.beginTransmission(MPU_addr);
-  Wire.write(0x1A);  // CONFIG register
-  Wire.write(0x03);  // set DLPF to 44Hz
-  Wire.endTransmission(true);
-  
   delay(500);
+  
+  // Perform initial calibration
+  perform_initial_calibration();
 
-  // Initialize quaternion
-  q.w = 1.0;
-  q.x = 0.0;
-  q.y = 0.0;
-  q.z = 0.0;
-  q_initial = q;
-  cumulative_angle = 0.0;
-  prev_yaw = 0.0;
-  gyro_yaw_rate = 0.0;
-
-  MsTimer2::set(25, handle_func);
+  MsTimer2::set(50, handle_func);
   MsTimer2::start();
+}
+
+void perform_initial_calibration() {
+  // Read initial accelerometer values for calibration
+  int16_t AcX, AcY, AcZ, Tmp, GyX, GyY, GyZ;
+  Wire.beginTransmission(MPU_addr);
+  Wire.write(0x3B);
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU_addr, 14, true);
+  AcX = Wire.read()<<8|Wire.read();
+  AcY = Wire.read()<<8|Wire.read();
+  AcZ = Wire.read()<<8|Wire.read();
+  Tmp = Wire.read()<<8|Wire.read(); // Skip temperature
+  GyX = Wire.read()<<8|Wire.read();
+  GyY = Wire.read()<<8|Wire.read();
+  GyZ = Wire.read()<<8|Wire.read();
+  
+  // Convert to physical units and normalize
+  float ax = (float)AcX / ACCEL_SCALE;
+  float ay = (float)AcY / ACCEL_SCALE;
+  float az = (float)AcZ / ACCEL_SCALE;
+  
+  float norm = sqrt(ax*ax + ay*ay + az*az);
+  if (norm > 0.0) {
+    initial_accel_x = ax / norm;
+    initial_accel_y = ay / norm;
+    initial_accel_z = az / norm;
+    calibrated = true;
+  }
+}
+
+float calculate_handle_plane_angle() {
+  if (!calibrated) return 0.0;
+  
+  int16_t AcX, AcY, AcZ, Tmp, GyX, GyY, GyZ;
+  Wire.beginTransmission(MPU_addr);
+  Wire.write(0x3B);
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU_addr, 14, true);
+  AcX = Wire.read()<<8|Wire.read();
+  AcY = Wire.read()<<8|Wire.read();
+  AcZ = Wire.read()<<8|Wire.read();
+  Tmp = Wire.read()<<8|Wire.read(); // Skip temperature
+  GyX = Wire.read()<<8|Wire.read();
+  GyY = Wire.read()<<8|Wire.read();
+  GyZ = Wire.read()<<8|Wire.read();
+  
+  // Convert to physical units and normalize current accelerometer reading
+  float ax = (float)AcX / ACCEL_SCALE;
+  float ay = (float)AcY / ACCEL_SCALE;
+  float az = (float)AcZ / ACCEL_SCALE;
+  
+  float norm = sqrt(ax*ax + ay*ay + az*az);
+  if (norm == 0.0) return 0.0;
+  ax /= norm;
+  ay /= norm;
+  az /= norm;
+  
+  // Calculate initial plane normal (initial_accel × sensor_z)
+  // sensor_z = (0, 0, 1)
+  float initial_plane_normal_x = initial_accel_y * 1.0 - initial_accel_z * 0.0;  // = initial_accel_y
+  float initial_plane_normal_y = initial_accel_z * 0.0 - initial_accel_x * 1.0;  // = -initial_accel_x
+  float initial_plane_normal_z = initial_accel_x * 0.0 - initial_accel_y * 0.0;  // = 0
+  
+  // Normalize initial plane normal
+  float initial_norm = sqrt(initial_plane_normal_x * initial_plane_normal_x + 
+                           initial_plane_normal_y * initial_plane_normal_y + 
+                           initial_plane_normal_z * initial_plane_normal_z);
+  if (initial_norm > 0.001) {
+    initial_plane_normal_x /= initial_norm;
+    initial_plane_normal_y /= initial_norm;
+    initial_plane_normal_z /= initial_norm;
+  }
+  
+  // Calculate current plane normal (current_accel × sensor_z)
+  float current_plane_normal_x = ay * 1.0 - az * 0.0;  // = ay
+  float current_plane_normal_y = az * 0.0 - ax * 1.0;  // = -ax
+  float current_plane_normal_z = ax * 0.0 - ay * 0.0;  // = 0
+  
+  // Normalize current plane normal
+  float current_norm = sqrt(current_plane_normal_x * current_plane_normal_x + 
+                           current_plane_normal_y * current_plane_normal_y + 
+                           current_plane_normal_z * current_plane_normal_z);
+  if (current_norm > 0.001) {
+    current_plane_normal_x /= current_norm;
+    current_plane_normal_y /= current_norm;
+    current_plane_normal_z /= current_norm;
+  }
+  
+  // Calculate angle between the two plane normals
+  float dot_product = initial_plane_normal_x * current_plane_normal_x + 
+                     initial_plane_normal_y * current_plane_normal_y + 
+                     initial_plane_normal_z * current_plane_normal_z;
+  
+  // Clamp dot product to valid range for acos
+  dot_product = constrain(dot_product, -1.0, 1.0);
+  
+  // Calculate cross product to determine sign
+  float cross_x = initial_plane_normal_y * current_plane_normal_z - initial_plane_normal_z * current_plane_normal_y;
+  float cross_y = initial_plane_normal_z * current_plane_normal_x - initial_plane_normal_x * current_plane_normal_z;
+  float cross_z = initial_plane_normal_x * current_plane_normal_y - initial_plane_normal_y * current_plane_normal_x;
+  
+  // Use sensor Z-axis to determine rotation direction
+  float sign_indicator = cross_z;  // Only Z component matters for Z-axis rotation
+  
+  float angle = acos(abs(dot_product));
+  if (sign_indicator < 0) {
+    angle = -angle;
+  }
+  
+  return angle * 180.0 / PI;  // Convert to degrees
 }
 
 int get_handle_val() {
@@ -337,29 +288,34 @@ int get_handle_val() {
   GyY=Wire.read()<<8|Wire.read();  // 0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
   GyZ=Wire.read()<<8|Wire.read();  // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
 
-  // Convert raw data to physical units
-  float ax = (float)AcX / ACCEL_SCALE;
-  float ay = (float)AcY / ACCEL_SCALE;
-  float az = (float)AcZ / ACCEL_SCALE;
-  float gx = (float)GyX / GYRO_SCALE;
-  float gy = (float)GyY / GYRO_SCALE;
-  float gz = (float)GyZ / GYRO_SCALE;
+  // Calculate handle plane angle deviation
+  float plane_angle = calculate_handle_plane_angle();
 
-  // Store current gyroscope yaw rate for validation
-  gyro_yaw_rate = gz;
+  // If handle is nearly vertical (within ±10 degrees), force handle to neutral
+  if (abs(plane_angle) <= 10.0) {
+    sum_gyz = 0;
+    int handle_val_p = 0;
+    
+    // Debug output
+    Serial.print("Plane angle: ");
+    Serial.print(plane_angle, 1);
+    Serial.print("° Handle: ");
+    Serial.print(handle_val_p);
+    Serial.println(" (FORCED TO 0)");
+    
+    return handle_val_p;
+  }
 
-  // Update quaternion using sensor fusion
-  update_quaternion_from_gyro(gx, gy, gz, DT);
-  update_quaternion_from_accel(ax, ay, az);
-
-  // Get handle rotation angle
-  handle_angle = get_handle_rotation_angle();
-
-  // Convert angle to discrete handle value
-  float angle_degrees = handle_angle * 180.0 / PI;
-  int handle_val_p = (int)(angle_degrees / 15.0);  // 15 degrees per step
-  
-  // Apply deadzone
+  double gyz_double = (GyZ - 8);
+  if (abs(gyz_double) < GYRO_NOT_SENSE_OFFSET) {
+    gyz_double = 0;
+  } else if (gyz_double >= GYRO_NOT_SENSE_OFFSET) {
+    gyz_double -= GYRO_NOT_SENSE_OFFSET;
+  } else if (gyz_double <= -GYRO_NOT_SENSE_OFFSET) {
+    gyz_double += GYRO_NOT_SENSE_OFFSET;
+  }
+  sum_gyz += gyz_double;
+  int handle_val_p = sum_gyz / 30000;
   if (abs(handle_val_p) < UNSENSE_HANDLE_VAL) {
     handle_val_p = 0;
   } else if (handle_val_p > 0) {
@@ -367,15 +323,13 @@ int get_handle_val() {
   } else if (handle_val_p < 0) {
     handle_val_p += UNSENSE_HANDLE_VAL;
   }
-  
-  // Clamp to valid range
   handle_val_p = max(-N_DUTY_RATIO + 1, handle_val_p);
   handle_val_p = min(N_DUTY_RATIO - 1, handle_val_p);
   
-  // Debug output (uncomment if needed)
-  Serial.print("Angle: ");
-  Serial.print(angle_degrees);
-  Serial.print(" Handle: ");
+  // Debug output
+  Serial.print("Plane angle: ");
+  Serial.print(plane_angle, 1);
+  Serial.print("° Handle: ");
   Serial.println(handle_val_p);
   
   return handle_val_p;
@@ -385,15 +339,15 @@ bool space_pressed = false;
 bool brake_pressed = false;
 
 void loop() {
-  // Calibration: Set current orientation as neutral position
   if (!digitalRead(CALIBRATION_PIN)) {
-    handle_val = 0;
-    q_initial = q;  // Store current quaternion as initial orientation
-    handle_angle = 0.0;
-    cumulative_angle = 0.0;  // Reset cumulative angle
-    prev_yaw = 0.0;  // Reset previous yaw
-    gyro_yaw_rate = 0.0;  // Reset gyro rate
-    calibration_done = true;
+    sum_gyz = 0;
+    perform_initial_calibration();  // Re-calibrate when button pressed
+    
+    // Wait for button release to avoid multiple calibrations
+    while (!digitalRead(CALIBRATION_PIN)) {
+      delay(10);
+    }
+    delay(100); // Debounce delay
   }
 
   if (!digitalRead(SPACE_PIN)) {
