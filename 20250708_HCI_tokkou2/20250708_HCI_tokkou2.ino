@@ -37,6 +37,7 @@ Quaternion q_initial = {1.0, 0.0, 0.0, 0.0};  // Initial orientation for calibra
 float handle_angle = 0.0;  // Current handle angle in radians
 float cumulative_angle = 0.0;  // Cumulative rotation angle
 float prev_yaw = 0.0;  // Previous yaw angle for cumulative calculation
+float gyro_yaw_rate = 0.0;  // Current gyroscope yaw rate
 bool calibration_done = false;
 
 #define HANDLE_NEUTRAL 477
@@ -170,11 +171,36 @@ float get_handle_rotation_angle() {
   // Calculate the difference from previous yaw
   float yaw_diff = yaw - prev_yaw;
   
-  // Handle wraparound at ±π
-  if (yaw_diff > PI) {
-    yaw_diff -= 2.0 * PI;
-  } else if (yaw_diff < -PI) {
-    yaw_diff += 2.0 * PI;
+  // More robust wraparound handling with gyroscope rate validation
+  if (abs(yaw_diff) > PI) {
+    // Check if the gyroscope rate supports this direction
+    float expected_direction = (gyro_yaw_rate > 0) ? 1.0 : -1.0;
+    
+    if (yaw_diff > PI) {
+      // Potential wrap from π to -π
+      float alt_diff = yaw_diff - 2.0 * PI;
+      // Use gyroscope rate to validate the direction
+      if (abs(gyro_yaw_rate) > 10.0) { // Only trust gyro if significant rotation
+        yaw_diff = (gyro_yaw_rate < 0) ? alt_diff : yaw_diff;
+      } else {
+        yaw_diff = alt_diff; // Default to shorter path
+      }
+    } else if (yaw_diff < -PI) {
+      // Potential wrap from -π to π  
+      float alt_diff = yaw_diff + 2.0 * PI;
+      // Use gyroscope rate to validate the direction
+      if (abs(gyro_yaw_rate) > 10.0) { // Only trust gyro if significant rotation
+        yaw_diff = (gyro_yaw_rate > 0) ? alt_diff : yaw_diff;
+      } else {
+        yaw_diff = alt_diff; // Default to shorter path
+      }
+    }
+  }
+  
+  // Additional safety check: limit maximum angular change per sample
+  float max_change = 0.5; // Maximum 0.5 radians (~30 degrees) per 25ms
+  if (abs(yaw_diff) > max_change) {
+    yaw_diff = (yaw_diff > 0) ? max_change : -max_change;
   }
   
   // Add to cumulative angle
@@ -291,6 +317,7 @@ void setup() {
   q_initial = q;
   cumulative_angle = 0.0;
   prev_yaw = 0.0;
+  gyro_yaw_rate = 0.0;
 
   MsTimer2::set(25, handle_func);
   MsTimer2::start();
@@ -318,6 +345,9 @@ int get_handle_val() {
   float gy = (float)GyY / GYRO_SCALE;
   float gz = (float)GyZ / GYRO_SCALE;
 
+  // Store current gyroscope yaw rate for validation
+  gyro_yaw_rate = gz;
+
   // Update quaternion using sensor fusion
   update_quaternion_from_gyro(gx, gy, gz, DT);
   update_quaternion_from_accel(ax, ay, az);
@@ -327,7 +357,7 @@ int get_handle_val() {
 
   // Convert angle to discrete handle value
   float angle_degrees = handle_angle * 180.0 / PI;
-  int handle_val_p = (int)(angle_degrees / 10.0);  // 10 degrees per step
+  int handle_val_p = (int)(angle_degrees / 15.0);  // 15 degrees per step
   
   // Apply deadzone
   if (abs(handle_val_p) < UNSENSE_HANDLE_VAL) {
@@ -357,24 +387,13 @@ bool brake_pressed = false;
 void loop() {
   // Calibration: Set current orientation as neutral position
   if (!digitalRead(CALIBRATION_PIN)) {
+    handle_val = 0;
     q_initial = q;  // Store current quaternion as initial orientation
     handle_angle = 0.0;
     cumulative_angle = 0.0;  // Reset cumulative angle
     prev_yaw = 0.0;  // Reset previous yaw
+    gyro_yaw_rate = 0.0;  // Reset gyro rate
     calibration_done = true;
-    
-    // LED feedback for calibration
-    for (int i = 0; i < 2; ++i) {
-      for (int j = 0; j < N_LED; ++j) {
-        digitalWrite(led_pins[i][j], HIGH);
-      }
-    }
-    delay(200);
-    for (int i = 0; i < 2; ++i) {
-      for (int j = 0; j < N_LED; ++j) {
-        digitalWrite(led_pins[i][j], LOW);
-      }
-    }
   }
 
   if (!digitalRead(SPACE_PIN)) {
