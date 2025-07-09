@@ -1,4 +1,7 @@
 #include<Wire.h>
+
+#define GYRO_NOT_SENSE_OFFSET 40
+
 const int MPU_addr=0x68;  // I2C address of the MPU-6050
 int16_t AcX,AcY,AcZ,Tmp,GyX,GyY,GyZ;
 void setup(){
@@ -7,6 +10,13 @@ void setup(){
   Wire.write(0x6B);  // PWR_MGMT_1 register
   Wire.write(0);     // set to zero (wakes up the MPU-6050)
   Wire.endTransmission(true);
+  
+  // Configure gyroscope range to ±2000 deg/s
+  Wire.beginTransmission(MPU_addr);
+  Wire.write(0x1B);  // GYRO_CONFIG register
+  Wire.write(0x18);  // set gyroscope range to ±2000 deg/s (11 on bits 4 and 3)
+  Wire.endTransmission(true);
+  
   Serial.begin(115200);
   delay(500);
 }
@@ -33,9 +43,15 @@ void loop(){
   // Serial.print("\tGyY = "); Serial.print(GyY);
   // Serial.print("\tGyZ = "); Serial.println(GyZ);
   double gyz_double = GyZ;
-  gyz_double -= 60;
+  if (abs(gyz_double) < GYRO_NOT_SENSE_OFFSET) {
+    gyz_double = 0;
+  } else if (gyz_double >= GYRO_NOT_SENSE_OFFSET) {
+    gyz_double -= GYRO_NOT_SENSE_OFFSET;
+  } else if (gyz_double <= -GYRO_NOT_SENSE_OFFSET) {
+    gyz_double += GYRO_NOT_SENSE_OFFSET;
+  }
   sum_gyz += gyz_double;
-  int handle = sum_gyz / 200000;
+  int handle = sum_gyz / 10000;
   Serial.print(gyz_double);
   Serial.print('\t');
   Serial.print(sum_gyz);
