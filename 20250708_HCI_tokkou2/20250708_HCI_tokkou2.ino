@@ -159,7 +159,7 @@ void setup() {
   // Perform initial calibration
   perform_initial_calibration();
 
-  MsTimer2::set(50, handle_func);
+  MsTimer2::set(40, handle_func);
   MsTimer2::start();
 }
 
@@ -297,11 +297,11 @@ int get_handle_val() {
     int handle_val_p = 0;
     
     // Debug output
-    Serial.print("Plane angle: ");
-    Serial.print(plane_angle, 1);
-    Serial.print("° Handle: ");
-    Serial.print(handle_val_p);
-    Serial.println(" (FORCED TO 0)");
+    // Serial.print("Plane angle: ");
+    // Serial.print(plane_angle, 1);
+    // Serial.print("° Handle: ");
+    // Serial.print(handle_val_p);
+    // Serial.println(" (FORCED TO 0)");
     
     return handle_val_p;
   }
@@ -315,7 +315,7 @@ int get_handle_val() {
     gyz_double += GYRO_NOT_SENSE_OFFSET;
   }
   sum_gyz += gyz_double;
-  int handle_val_p = sum_gyz / 30000;
+  int handle_val_p = sum_gyz / 25000;
   if (abs(handle_val_p) < UNSENSE_HANDLE_VAL) {
     handle_val_p = 0;
   } else if (handle_val_p > 0) {
@@ -327,10 +327,10 @@ int get_handle_val() {
   handle_val_p = min(N_DUTY_RATIO - 1, handle_val_p);
   
   // Debug output
-  Serial.print("Plane angle: ");
-  Serial.print(plane_angle, 1);
-  Serial.print("° Handle: ");
-  Serial.println(handle_val_p);
+  // Serial.print("Plane angle: ");
+  // Serial.print(plane_angle, 1);
+  // Serial.print("° Handle: ");
+  // Serial.println(handle_val_p);
   
   return handle_val_p;
 }
@@ -347,7 +347,7 @@ void loop() {
     while (!digitalRead(CALIBRATION_PIN)) {
       delay(10);
     }
-    delay(100); // Debounce delay
+    delay(50); // Debounce delay
   }
 
   if (!digitalRead(SPACE_PIN)) {
