@@ -11,7 +11,7 @@ const int MPU_addr=0x68;  // I2C address of the MPU-6050
 
 #define N_LED 5
 const int led_pins[2][N_LED] = {
-  {A3, A1, A0, 15, A2},
+  {A3, A1, A0, 15, A2}, // right
   {6, 4, 5, 8, 9} // left
 };
 
